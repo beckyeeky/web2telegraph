@@ -13,6 +13,10 @@ import json
 import os
 import re
 import sys
+import warnings
+
+# 消除 requests 与 urllib3 版本不匹配的警告（不影响功能）
+warnings.filterwarnings("ignore", message=".*urllib3.*")
 
 import requests
 from readability import Document
