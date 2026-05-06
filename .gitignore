@@ -1,0 +1,17 @@
+# Telegraph 配置（含敏感 token）
+telegraph_config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
