@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import warnings
+from datetime import datetime
 
 # 消除 requests 与 urllib3 版本不匹配的警告（不影响功能）
 warnings.filterwarnings("ignore", message=".*urllib3.*")
@@ -26,6 +27,7 @@ from html_telegraph_poster.utils import DocumentPreprocessor
 # ── 配置 ────────────────────────────────────────────
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_FILE = os.path.join(SCRIPT_DIR, "telegraph_config.json")
+HISTORY_FILE = os.path.join(SCRIPT_DIR, "history.json")
 DEFAULT_AUTHOR = "Web2Telegraph"
 
 HEADERS = {
@@ -51,6 +53,31 @@ def save_config(config):
     """保存配置文件"""
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2, ensure_ascii=False)
+
+
+# ── 历史记录 ────────────────────────────────────────
+def load_history():
+    """加载发布历史"""
+    if os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+
+def save_history_entry(source_url, telegraph_url, telegraph_path, title, author):
+    """追加一条发布记录"""
+    history = load_history()
+    entry = {
+        "source_url": source_url,
+        "telegraph_url": telegraph_url,
+        "telegraph_path": telegraph_path,
+        "title": title,
+        "author": author,
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    history.append(entry)
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
 
 
 # ── 设置 Telegraph 账号 ─────────────────────────────
@@ -178,13 +205,15 @@ def post_to_telegraph(
     try:
         result = t.post(title=title, author=author, text=content_html)
         url = result["url"]
+        path = result["path"]
         print(f"\n🎉 发布成功!")
         print(f"📄 标题: {title}")
         print(f"🔗 链接: {url}")
-        return url
+        print(f"✏️  编辑: https://telegra.ph/{path}")
+        return url, path
     except Exception as e:
         print(f"❌ 发布失败: {e}")
-        return None
+        return None, None
 
 # ── 交互菜单 ────────────────────────────────────────
 def interactive_menu():
@@ -203,13 +232,14 @@ def interactive_menu():
         print("   1. 抓取网页并发布到 Telegraph")
         print("   2. 配置/重新配置 Telegraph 账号")
         print("   3. 查看已有配置")
+        print("   4. 查看发布历史")
+        print("   5. 编辑已发布页面")
         print("   0. 退出")
         print("-" * 50)
 
         choice = input("👉 请选择 [1]: ").strip() or "1"
 
         if choice == "1":
-            # 检查是否已配置
             if not config.get("access_token"):
                 print("\n⚠️  尚未配置账号，先来配置一下：")
                 setup()
@@ -224,6 +254,17 @@ def interactive_menu():
 
         elif choice == "3":
             _show_config(config)
+
+        elif choice == "4":
+            _view_history()
+
+        elif choice == "5":
+            if not config.get("access_token"):
+                print("\n⚠️  尚未配置账号，先来配置一下：")
+                setup()
+                config = load_config()
+                continue
+            _edit_existing_page(config)
 
         elif choice == "0":
             print("👋 再见!")
@@ -278,7 +319,7 @@ def _do_capture(config):
             upload_img = False
 
         # 2. 发布
-        result_url = post_to_telegraph(
+        result_url, result_path = post_to_telegraph(
             title=title,
             content_html=content_html,
             author=author,
@@ -286,8 +327,12 @@ def _do_capture(config):
             upload_images=upload_img,
         )
 
-        if result_url and len(urls) > 1 and i < len(urls) - 1:
-            input("\n按回车继续下一个...")
+        if result_url and result_path:
+            # 保存历史记录
+            save_history_entry(url, result_url, result_path, title, author)
+
+            if len(urls) > 1 and i < len(urls) - 1:
+                input("\n按回车继续下一个...")
 
 
 def _show_config(config):
@@ -301,6 +346,107 @@ def _show_config(config):
             if k == "access_token":
                 v = v[:20] + "..." if len(v) > 20 else v
             print(f"  {k}: {v}")
+
+
+def _view_history():
+    """查看发布历史"""
+    history = load_history()
+    print(f"\n📋 发布历史 (共 {len(history)} 条)")
+    print("-" * 60)
+    if not history:
+        print("  (暂无记录)")
+        return
+
+    for i, h in enumerate(history):
+        print(f"  [{i}] {h['title'][:40]}")
+        print(f"      源: {h['source_url'][:55]}")
+        print(f"      页: {h['telegraph_url']}")
+        print(f"      时: {h['time']}")
+        print()
+
+
+def _edit_existing_page(config):
+    """编辑已发布的 Telegraph 页面"""
+    history = load_history()
+    if not history:
+        print("\n📋 暂无发布记录")
+        return
+
+    print("\n选择要编辑的页面:")
+    print("-" * 50)
+    for i, h in enumerate(history):
+        short_url = h["source_url"][:50]
+        print(f"  [{i}] {h['title'][:35]} | {short_url}")
+
+    print(f"  [m] 手动输入 Telegraph 路径")
+    print(f"  [0] 返回")
+
+    choice = input("\n👉 请选择: ").strip()
+
+    if choice == "0" or choice == "":
+        return
+
+    if choice.lower() == "m":
+        path = input("✏️  输入 Telegraph 路径 (如 Title-01-01): ").strip()
+        if not path:
+            return
+        # 手动模式下需要用户提供新 URL 来抓取内容
+        url = input("🔗 输入新的源网页 URL: ").strip()
+        if not url:
+            return
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+        source_url = url
+    else:
+        try:
+            idx = int(choice)
+            entry = history[idx]
+            path = entry["telegraph_path"]
+            source_url = entry["source_url"]
+            print(f"\n📄 编辑: {entry['title']}")
+            print(f"   原页面: {entry['telegraph_url']}")
+        except (ValueError, IndexError):
+            print("❌ 无效选项")
+            return
+
+    # 选择更新方式
+    print("\n编辑方式:")
+    print("  1. 重新抓取原网页（更新正文内容）")
+    print("  2. 抓取新网页内容")
+    print("  0. 返回")
+    mode = input("👉 请选择 [1]: ").strip() or "1"
+
+    if mode == "0":
+        return
+
+    if mode == "2":
+        new_url = input(f"🔗 新网页 URL [{source_url}]: ").strip()
+        if new_url:
+            source_url = new_url
+        if not source_url.startswith(("http://", "https://")):
+            source_url = "https://" + source_url
+
+    try:
+        title, content_html = extract_content(source_url)
+    except Exception as e:
+        print(f"❌ 抓取失败: {e}")
+        return
+
+    print(f"\n📄 原标题: {title}")
+    custom_title = input("   新标题 (回车保持): ").strip()
+    if custom_title:
+        title = custom_title
+
+    author = config.get("author", DEFAULT_AUTHOR)
+
+    print("📤 正在更新 Telegraph 页面...")
+    t = TelegraphPoster(access_token=config["access_token"])
+    try:
+        result = t.edit(text=content_html, path=path)
+        print(f"\n✅ 更新成功!")
+        print(f"🔗 {result['url']}")
+    except Exception as e:
+        print(f"❌ 更新失败: {e}")
 
 
 # ── CLI 快速模式 (保留向后兼容) ─────────────────────
@@ -356,7 +502,7 @@ def main():
         title = args.title
     author = args.author or config.get("author", DEFAULT_AUTHOR)
 
-    result_url = post_to_telegraph(
+    result_url, result_path = post_to_telegraph(
         title=title,
         content_html=content_html,
         author=author,
@@ -366,6 +512,9 @@ def main():
 
     if not result_url:
         sys.exit(1)
+
+    if result_path:
+        save_history_entry(url, result_url, result_path, title, author)
 
 
 if __name__ == "__main__":

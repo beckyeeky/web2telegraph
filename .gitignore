@@ -1,5 +1,6 @@
 # Telegraph 配置（含敏感 token）
 telegraph_config.json
+history.json
 
 # Python
 __pycache__/
